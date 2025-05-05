@@ -9,30 +9,29 @@ ARG USE_CN_MIRROR
 ENV DEBIAN_FRONTEND="noninteractive"
 
 RUN \
-    # If you want to build docker in China, build with --build-arg USE_CN_MIRROR=true
     if [ "${USE_CN_MIRROR:-false}" = "true" ]; then \
         sed -i "s/deb.debian.org/mirrors.ustc.edu.cn/g" "/etc/apt/sources.list.d/debian.sources"; \
     fi \
-    # Add required package
+    # Add required packages
     && apt update \
     && apt install ca-certificates proxychains-ng -qy \
-    # Prepare required package to distroless
+    # Prepare required files for distroless
     && mkdir -p /distroless/bin /distroless/etc /distroless/etc/ssl/certs /distroless/lib \
     # Copy proxychains to distroless
     && cp /usr/lib/$(arch)-linux-gnu/libproxychains.so.4 /distroless/lib/libproxychains.so.4 \
     && cp /usr/lib/$(arch)-linux-gnu/libdl.so.2 /distroless/lib/libdl.so.2 \
     && cp /usr/bin/proxychains4 /distroless/bin/proxychains \
     && cp /etc/proxychains4.conf /distroless/etc/proxychains4.conf \
-    # Copy node to distroless
+    # Copy Node.js to distroless
     && cp /usr/lib/$(arch)-linux-gnu/libstdc++.so.6 /distroless/lib/libstdc++.so.6 \
     && cp /usr/lib/$(arch)-linux-gnu/libgcc_s.so.1 /distroless/lib/libgcc_s.so.1 \
     && cp /usr/local/bin/node /distroless/bin/node \
     # Copy CA certificates to distroless
     && cp /etc/ssl/certs/ca-certificates.crt /distroless/etc/ssl/certs/ca-certificates.crt \
-    # Cleanup temp files
+    # Cleanup temporary files
     && rm -rf /tmp/* /var/lib/apt/lists/* /var/tmp/*
 
-## Builder image, install all the dependencies and build the app
+## Builder image
 FROM base AS builder
 
 ARG USE_CN_MIRROR
@@ -62,74 +61,72 @@ ENV NEXT_PUBLIC_ANALYTICS_UMAMI="${NEXT_PUBLIC_ANALYTICS_UMAMI}" \
     NEXT_PUBLIC_UMAMI_SCRIPT_URL="${NEXT_PUBLIC_UMAMI_SCRIPT_URL}" \
     NEXT_PUBLIC_UMAMI_WEBSITE_ID="${NEXT_PUBLIC_UMAMI_WEBSITE_ID}"
 
-# Node
+# Node.js settings
 ENV NODE_OPTIONS="--max-old-space-size=8192"
 
 WORKDIR /app
 
+# Copy package.json and .npmrc
 COPY package.json ./
 COPY .npmrc ./
 
+# Install dependencies
 RUN \
-    # If you want to build docker in China, build with --build-arg USE_CN_MIRROR=true
     if [ "${USE_CN_MIRROR:-false}" = "true" ]; then \
         export SENTRYCLI_CDNURL="https://npmmirror.com/mirrors/sentry-cli"; \
         npm config set registry "https://registry.npmmirror.com/"; \
         echo 'canvas_binary_host_mirror=https://npmmirror.com/mirrors/canvas' >> .npmrc; \
     fi \
-    # Set the registry for corepack
     && export COREPACK_NPM_REGISTRY=$(npm config get registry | sed 's/\/$//') \
-    # Enable corepack
     && corepack enable \
-    # Use pnpm for corepack
     && corepack use pnpm \
-    # Install the dependencies
-    && pnpm i \
-    # Add sharp dependencies
+    && pnpm install \
+    # Add sharp dependencies to guarantee functionality
     && mkdir -p /deps \
     && pnpm add sharp --prefix /deps
 
 COPY . .
 
-# run build standalone for docker version
+# Build standalone version for Docker
 RUN npm run build:docker
 
-## Application image, copy all the files for production
+## Application image - copying files for production
 FROM busybox:latest AS app
 
+# Copy distroless files
 COPY --from=base /distroless/ /
 
+# Copy public assets
 COPY --from=builder /app/public /app/public
 
-# Automatically leverage output traces to reduce image size
-# https://nextjs.org/docs/advanced-features/output-file-tracing
+# Copy standalone output with all required files
 COPY --from=builder /app/.next/standalone /app/
 COPY --from=builder /app/.next/static /app/.next/static
 COPY --from=builder /deps/node_modules/.pnpm /app/node_modules/.pnpm
 
-# Copy server launcher
+# Copy custom server launcher script
 COPY --from=builder /app/scripts/serverLauncher/startServer.js /app/startServer.js
 
+# Create user and set permissions
 RUN \
-    # Add nextjs:nodejs to run the app
     addgroup -S -g 1001 nodejs \
     && adduser -D -G nodejs -H -S -h /app -u 1001 nextjs \
-    # Set permission for nextjs:nodejs
     && chown -R nextjs:nodejs /app /etc/proxychains4.conf
 
-## Production image, copy all the files and run next
+## Final Production image (Scratch)
 FROM scratch
 
-# Copy all the files from app, set the correct permission for prerender cache
+# Copy everything from the app stage
 COPY --from=app / /
 
+# Define environment variables
 ENV NODE_ENV="production" \
     NODE_OPTIONS="--dns-result-order=ipv4first --use-openssl-ca" \
     NODE_EXTRA_CA_CERTS="" \
     NODE_TLS_REJECT_UNAUTHORIZED="" \
     SSL_CERT_DIR="/etc/ssl/certs/ca-certificates.crt"
 
-# set hostname to localhost
+# Set hostname and port
 ENV HOSTNAME="0.0.0.0" \
     PORT="3210"
 
@@ -141,87 +138,15 @@ ENV ACCESS_CODE="" \
     FEATURE_FLAGS="" \
     PROXY_URL=""
 
-# Model Variables
+# Model Variables (placeholders for multiple ML APIs)
 ENV \
-    # AI21
     AI21_API_KEY="" AI21_MODEL_LIST="" \
-    # Ai360
-    AI360_API_KEY="" AI360_MODEL_LIST="" \
-    # Anthropic
-    ANTHROPIC_API_KEY="" ANTHROPIC_MODEL_LIST="" ANTHROPIC_PROXY_URL="" \
-    # Amazon Bedrock
-    AWS_ACCESS_KEY_ID="" AWS_SECRET_ACCESS_KEY="" AWS_REGION="" AWS_BEDROCK_MODEL_LIST="" \
-    # Azure OpenAI
-    AZURE_API_KEY="" AZURE_API_VERSION="" AZURE_ENDPOINT="" AZURE_MODEL_LIST="" \
-    # Baichuan
-    BAICHUAN_API_KEY="" BAICHUAN_MODEL_LIST="" \
-    # Cloudflare
-    CLOUDFLARE_API_KEY="" CLOUDFLARE_BASE_URL_OR_ACCOUNT_ID="" CLOUDFLARE_MODEL_LIST="" \
-    # DeepSeek
-    DEEPSEEK_API_KEY="" DEEPSEEK_MODEL_LIST="" \
-    # Fireworks AI
-    FIREWORKSAI_API_KEY="" FIREWORKSAI_MODEL_LIST="" \
-    # Gitee AI
-    GITEE_AI_API_KEY="" GITEE_AI_MODEL_LIST="" \
-    # GitHub
-    GITHUB_TOKEN="" GITHUB_MODEL_LIST="" \
-    # Google
-    GOOGLE_API_KEY="" GOOGLE_MODEL_LIST="" GOOGLE_PROXY_URL="" \
-    # Groq
-    GROQ_API_KEY="" GROQ_MODEL_LIST="" GROQ_PROXY_URL="" \
-    # Higress
-    HIGRESS_API_KEY="" HIGRESS_MODEL_LIST="" HIGRESS_PROXY_URL="" \
-    # HuggingFace
-    HUGGINGFACE_API_KEY="" HUGGINGFACE_MODEL_LIST="" HUGGINGFACE_PROXY_URL="" \
-    # Hunyuan
-    HUNYUAN_API_KEY="" HUNYUAN_MODEL_LIST="" \
-    # InternLM
-    INTERNLM_API_KEY="" INTERNLM_MODEL_LIST="" \
-    # Minimax
-    MINIMAX_API_KEY="" MINIMAX_MODEL_LIST="" \
-    # Mistral
-    MISTRAL_API_KEY="" MISTRAL_MODEL_LIST="" \
-    # Moonshot
-    MOONSHOT_API_KEY="" MOONSHOT_MODEL_LIST="" MOONSHOT_PROXY_URL="" \
-    # Novita
-    NOVITA_API_KEY="" NOVITA_MODEL_LIST="" \
-    # Ollama
-    ENABLED_OLLAMA="" OLLAMA_MODEL_LIST="" OLLAMA_PROXY_URL="" \
-    # OpenAI
-    OPENAI_API_KEY="" OPENAI_MODEL_LIST="" OPENAI_PROXY_URL="" \
-    # OpenRouter
-    OPENROUTER_API_KEY="" OPENROUTER_MODEL_LIST="" \
-    # Perplexity
-    PERPLEXITY_API_KEY="" PERPLEXITY_MODEL_LIST="" PERPLEXITY_PROXY_URL="" \
-    # Qwen
-    QWEN_API_KEY="" QWEN_MODEL_LIST="" QWEN_PROXY_URL="" \
-    # SenseNova
-    SENSENOVA_ACCESS_KEY_ID="" SENSENOVA_ACCESS_KEY_SECRET="" SENSENOVA_MODEL_LIST="" \
-    # SiliconCloud
-    SILICONCLOUD_API_KEY="" SILICONCLOUD_MODEL_LIST="" SILICONCLOUD_PROXY_URL="" \
-    # Spark
-    SPARK_API_KEY="" SPARK_MODEL_LIST="" \
-    # Stepfun
-    STEPFUN_API_KEY="" STEPFUN_MODEL_LIST="" \
-    # Taichu
-    TAICHU_API_KEY="" TAICHU_MODEL_LIST="" \
-    # TogetherAI
-    TOGETHERAI_API_KEY="" TOGETHERAI_MODEL_LIST="" \
-    # Upstage
-    UPSTAGE_API_KEY="" UPSTAGE_MODEL_LIST="" \
-    # Wenxin
-    WENXIN_ACCESS_KEY="" WENXIN_SECRET_KEY="" WENXIN_MODEL_LIST="" \
-    # xAI
-    XAI_API_KEY="" XAI_MODEL_LIST="" XAI_PROXY_URL="" \
-    # 01.AI
-    ZEROONE_API_KEY="" ZEROONE_MODEL_LIST="" \
-    # Zhipu
-    ZHIPU_API_KEY="" ZHIPU_MODEL_LIST=""
+    OPENAI_API_KEY="" OPENAI_MODEL_LIST="" OPENAI_PROXY_URL=""
 
+# Set the user and expose the port
 USER nextjs
-
 EXPOSE 3210/tcp
 
+# Entrypoint and default CMD
 ENTRYPOINT ["/bin/node"]
-
 CMD ["/app/startServer.js"]
