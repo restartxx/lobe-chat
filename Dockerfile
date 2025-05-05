@@ -93,6 +93,9 @@ RUN \
 COPY . .
 
 # run build standalone for docker version
+ARG DOCKER=true
+ENV DOCKER=${DOCKER}
+
 RUN npm run build:docker
 
 ## Application image, copy all the files for production
