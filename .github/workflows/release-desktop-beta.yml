@@ -97,7 +97,7 @@ jobs:
 
       # Build apenas para Linux arm64 (usando flag --arm64; ajuste se o seu script não aceitar args)
       - name: Build artifact on Linux ARM64
-        run: npm run desktop:build -- --arm64 --linux
+        run: npm run desktop:build -- --arm64 --linux appimage
         env:
           APP_URL: http://localhost:3015
           DATABASE_URL: 'postgresql://postgres@localhost:5432/postgres'
